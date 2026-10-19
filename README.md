@@ -37,9 +37,9 @@ Against MWeb 4.7.9, the middle result of 7–9 cold launches per app on an Apple
 | Memory, 32 KB README open | **41 MB** | 85 MB | about half |
 | Memory, 1 MB document open | **55 MB** | 141 MB | about half |
 
-MWeb opens files in its editor, while JustMD renders the full formatted page plus the source, so the comparison is harder for JustMD, not easier. Only MWeb was tested. The method, the test files and the claims these numbers do and don't support are in [`marketing/benchmarks`](marketing/benchmarks/README.md).
+MWeb opens files in its editor, while JustMD renders the full formatted page plus the source, so the comparison is harder for JustMD, not easier. Only MWeb was tested.
 
-<p align="center"><img src="marketing/benchmarks/justmd-vs-mweb.png" alt="Bar chart: JustMD versus MWeb 4.7.9, time to first content and memory, for a 32 KB README and a 1 MB document." width="640"></p>
+<p align="center"><img src=".github/assets/justmd-vs-mweb.png" alt="Bar chart: JustMD versus MWeb 4.7.9, time to first content and memory, for a 32 KB README and a 1 MB document." width="640"></p>
 
 ## What it does
 
@@ -80,8 +80,6 @@ JustMD is SwiftUI around AppKit text views. There is no web view.
 - **Parsing:** Apple's [swift-markdown](https://github.com/swiftlang/swift-markdown) (cmark-gfm), walked into a styled `NSAttributedString`.
 - **Rendering:** off the main thread, in parallel ~4 KB chunks split at headings, cached by content, so a reload only replaces the chunks that changed.
 - **Drawing:** a custom TextKit 1 layout manager draws every decoration (the gradient H1, heading stripes, checkboxes, table borders, code block chrome) and only ever lays out what's on screen.
-
-The architecture notes and the traps found along the way are in [`CLAUDE.md`](CLAUDE.md); the history of each change is in [`docs/HISTORY.md`](docs/HISTORY.md).
 
 ## Contributing
 
