@@ -64,15 +64,20 @@ extension RenderedDocument {
     /// Lines of `new` that `old` doesn't have, as UTF-16 ranges shifted by `offset`: what a reload
     /// added or rewrote. Adjacent lines merge into one block; deletions leave nothing to show.
     /// Lines compare as UTF-16 arrays because String == normalises non-ASCII text per character.
+    /// A line counts as old if an unused copy of it exists anywhere in `old`, not in order: an LCS
+    /// diff is quadratic in the changes and took 91 s on a rewritten 1 MB file. Moved lines don't light.
     static func changedLines(from old: String, to new: String, offset: Int = 0) -> [NSRange] {
         let lines = { (s: String) in Array(s.utf16).split(separator: 0x0A, omittingEmptySubsequences: false) }
         let newLines = lines(new)
-        let inserted = Set(newLines.difference(from: lines(old)).insertions.compactMap { change -> Int? in
-            if case .insert(let index, _, _) = change { index } else { nil }
-        })
+        var unused = lines(old).reduce(into: [ArraySlice<UInt16>: Int]()) { $0[$1, default: 0] += 1 }
+        let inserted = newLines.map { line in
+            guard let count = unused[line], count > 0 else { return true }
+            unused[line] = count - 1
+            return false
+        }
         let starts = newLines.reduce(into: [offset]) { $0.append($0.last! + $1.count + 1) }
         return newLines.indices
-            .filter { inserted.contains($0) && !newLines[$0].isEmpty }
+            .filter { inserted[$0] && !newLines[$0].isEmpty }
             .map { NSRange(location: starts[$0], length: newLines[$0].count) }
             .reduce(into: []) { blocks, line in
                 if let last = blocks.last, last.upperBound + 1 == line.location {
