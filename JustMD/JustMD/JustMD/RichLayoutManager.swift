@@ -26,6 +26,9 @@ final class RichLayoutManager: NSLayoutManager {
     nonisolated(unsafe) var listPrefixRanges: [(range: NSRange, nested: Bool)] = []
     nonisolated(unsafe) var checkboxRanges: [(range: NSRange, isDone: Bool)] = []
     nonisolated(unsafe) var tableRanges: [NSRange] = []
+    /// What the last reload added or rewrote, and how strongly it glows (1 → 0 as it fades)
+    nonisolated(unsafe) var changedRanges: [NSRange] = []
+    nonisolated(unsafe) var changeGlow: CGFloat = 0
 
     override init() { super.init() }
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -39,6 +42,37 @@ final class RichLayoutManager: NSLayoutManager {
         drawQuoteBackgrounds(for: glyphsToShow, at: origin)
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         drawTableBorders(for: glyphsToShow, at: origin)
+        drawChangeGlow(for: glyphsToShow, at: origin)
+    }
+
+    /// A tint across each changed block with a glowing bar down its left edge. Only the visible
+    /// part of a block is measured; tiles meet edge to edge, so the shapes stay square.
+    nonisolated private func drawChangeGlow(for glyphRange: NSRange, at origin: CGPoint) {
+        guard changeGlow > 0, let container = textContainers.first else { return }
+        let visible = characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        for changed in changedRanges {
+            let shown = NSIntersectionRange(visible, changed)
+            guard shown.length > 0 else { continue }
+            var union: CGRect?
+            enumerateLineFragments(forGlyphRange: self.glyphRange(forCharacterRange: shown, actualCharacterRange: nil)) { lineRect, usedRect, _, _, _ in
+                guard usedRect.height > 0 else { return }
+                union = union.map { $0.union(lineRect) } ?? lineRect
+            }
+            guard let rect = union, container.size.width.isFinite else { continue }
+            // Spans the container like code block chrome; drawing left of it is clipped away
+            let panel = CGRect(x: origin.x, y: rect.minY + origin.y, width: container.size.width, height: rect.height)
+            Theme.accentPrimary.withAlphaComponent(0.12 * changeGlow).setFill()
+            panel.fill(using: .sourceOver)
+
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowColor = Theme.accentPrimary.withAlphaComponent(changeGlow)
+            shadow.shadowBlurRadius = 6
+            shadow.set()
+            Theme.accentPrimary.withAlphaComponent(changeGlow).setFill()
+            CGRect(x: panel.minX, y: panel.minY, width: 2, height: panel.height).fill(using: .sourceOver)
+            NSGraphicsContext.restoreGraphicsState()
+        }
     }
 
     /// Decorations are drawn per visible tile; querying layout for off-screen blocks would force

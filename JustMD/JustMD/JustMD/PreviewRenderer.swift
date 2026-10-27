@@ -60,6 +60,28 @@ extension RenderedDocument {
         let length = { (segs: [Segment]) in segs.dropFirst(prefix).dropLast(suffix).map(\.length).reduce(0, +) }
         return (NSRange(location: start, length: length(old)), NSRange(location: start, length: length(new)))
     }
+
+    /// Lines of `new` that `old` doesn't have, as UTF-16 ranges shifted by `offset`: what a reload
+    /// added or rewrote. Adjacent lines merge into one block; deletions leave nothing to show.
+    /// Lines compare as UTF-16 arrays because String == normalises non-ASCII text per character.
+    static func changedLines(from old: String, to new: String, offset: Int = 0) -> [NSRange] {
+        let lines = { (s: String) in Array(s.utf16).split(separator: 0x0A, omittingEmptySubsequences: false) }
+        let newLines = lines(new)
+        let inserted = Set(newLines.difference(from: lines(old)).insertions.compactMap { change -> Int? in
+            if case .insert(let index, _, _) = change { index } else { nil }
+        })
+        let starts = newLines.reduce(into: [offset]) { $0.append($0.last! + $1.count + 1) }
+        return newLines.indices
+            .filter { inserted.contains($0) && !newLines[$0].isEmpty }
+            .map { NSRange(location: starts[$0], length: newLines[$0].count) }
+            .reduce(into: []) { blocks, line in
+                if let last = blocks.last, last.upperBound + 1 == line.location {
+                    blocks[blocks.count - 1].length = line.upperBound - last.location
+                } else {
+                    blocks.append(line)
+                }
+            }
+    }
 }
 
 /// Markdown identity by exact UTF-8 bytes. Swift's String hashing and == Unicode-normalise

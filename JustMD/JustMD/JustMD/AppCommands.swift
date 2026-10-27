@@ -44,6 +44,13 @@ struct AppCommands: Commands {
             Button(showSource ? "Hide Source" : "Show Source") { showSource.toggle() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
             Divider()
+            Button("Next Change") { NotificationCenter.default.post(name: .nextChange, object: nil) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(tabState.selectedTab == nil)
+            Button("Previous Change") { NotificationCenter.default.post(name: .previousChange, object: nil) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(tabState.selectedTab == nil)
+            Divider()
         }
 
         // Replaces the window's Close: ⌘W closes the current tab, and the window once none are left

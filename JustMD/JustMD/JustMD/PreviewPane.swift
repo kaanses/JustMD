@@ -137,6 +137,9 @@ enum Theme {
 extension Notification.Name {
     /// Sent by File ▸ Print; the visible preview prints itself
     static let printPreview = Notification.Name("JustMDPrintPreview")
+    /// Sent by View ▸ Next/Previous Change; the visible preview scrolls to the block
+    static let nextChange = Notification.Name("JustMDNextChange")
+    static let previousChange = Notification.Name("JustMDPreviousChange")
 }
 
 struct PreviewPane: NSViewRepresentable {
@@ -219,10 +222,22 @@ struct PreviewPane: NSViewRepresentable {
         /// Set on tab switch: where the incoming document should open (its last position, or the top)
         private var pendingScroll: CGPoint?
         private var printObserver: NSObjectProtocol?
+        private var changeObservers: [NSObjectProtocol] = []
+        /// Bumped by every render applied, so a diff that finishes late can tell it is stale
+        private var generation = 0
+        private var glowTimer: Timer?
+        private var glowStart = Date()
+        /// Where the last jump landed: pressing again without scrolling steps on from there
+        private var lastJump: (index: Int, origin: CGPoint)?
 
         init() {
             printObserver = NotificationCenter.default.addObserver(forName: .printPreview, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.printDocument() }
+            }
+            changeObservers = [(Notification.Name.nextChange, true), (.previousChange, false)].map { name, forward in
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.jumpToChange(forward: forward) }
+                }
             }
             // An image finished loading: only the attachments showing it need new layout
             imageObserver = NotificationCenter.default.addObserver(forName: ImageStore.didChange, object: nil, queue: .main) { [weak self] note in
@@ -317,6 +332,12 @@ struct PreviewPane: NSViewRepresentable {
             // Swap only the chunks that changed: keeps layout for the rest of the document
             // and avoids re-storing a whole large file on every keystroke
             let diff = RenderedDocument.changedRange(from: applied?.segments ?? [], to: document.segments)
+            generation += 1
+            if let previous = applied, pendingScroll == nil {
+                findChanges(old: previous, new: document, in: diff)
+            } else {
+                showChanges([])
+            }
             if applied == nil || diff.old.upperBound > storage.length {
                 storage.setAttributedString(document.text)
                 // First document: give the preview focus so ⌘F and keyboard scrolling act on it
@@ -335,6 +356,81 @@ struct PreviewPane: NSViewRepresentable {
             pendingScroll = nil
             // Decorations are keyed to ranges, not text, so stale drawing must be cleared
             textView.needsDisplay = true
+        }
+
+        // MARK: Changes since the last reload
+
+        /// Only the chunks that changed are compared, off the main thread: a rewrite of a large
+        /// file is a line diff over the whole document.
+        private func findChanges(old: RenderedDocument, new: RenderedDocument, in diff: (old: NSRange, new: NSRange)) {
+            let before = (old.text.string as NSString).substring(with: diff.old)
+            let after = (new.text.string as NSString).substring(with: diff.new)
+            let generation = generation
+            Task {
+                let ranges = await Task.detached(priority: .userInitiated) {
+                    RenderedDocument.changedLines(from: before, to: after, offset: diff.new.location)
+                }.value
+                guard generation == self.generation else { return }
+                showChanges(ranges)
+            }
+        }
+
+        private func showChanges(_ ranges: [NSRange]) {
+            layoutManager?.changedRanges = ranges
+            lastJump = nil
+            if ranges.isEmpty { setGlow(0) } else { startGlow() }
+        }
+
+        /// Full strength long enough to find, then fades out
+        private func startGlow() {
+            glowStart = Date()
+            setGlow(1)
+            guard glowTimer == nil else { return }
+            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let elapsed = Date().timeIntervalSince(self.glowStart)
+                    self.setGlow(elapsed < 1.5 ? 1 : max(0, 1 - (elapsed - 1.5) / 2.5))
+                }
+            }
+            // .common: keeps fading while the reader scrolls
+            RunLoop.main.add(timer, forMode: .common)
+            glowTimer = timer
+        }
+
+        private func setGlow(_ glow: CGFloat) {
+            guard let textView, let layoutManager else { return }
+            if glow == 0 { glowTimer?.invalidate(); glowTimer = nil }
+            guard glow != layoutManager.changeGlow else { return }
+            layoutManager.changeGlow = glow
+            // The visible rect only: invalidating the changed ranges would lay out off-screen text
+            textView.setNeedsDisplay(textView.visibleRect)
+        }
+
+        /// Scrolls the next (or previous) changed block to near the top, wrapping at the ends,
+        /// and makes the changes glow again.
+        private func jumpToChange(forward: Bool) {
+            guard let textView, let layoutManager, let container = textView.textContainer,
+                  let clip = textView.enclosingScrollView?.contentView else { return }
+            let ranges = layoutManager.changedRanges
+            guard !ranges.isEmpty else { NSSound.beep(); return }
+            let index: Int
+            if let lastJump, lastJump.origin == clip.bounds.origin {
+                index = (lastJump.index + (forward ? 1 : ranges.count - 1)) % ranges.count
+            } else {
+                let top = layoutManager.characterIndex(for: CGPoint(x: 0, y: clip.bounds.minY - textView.textContainerOrigin.y),
+                                                       in: container, fractionOfDistanceBetweenInsertionPoints: nil)
+                index = forward
+                    ? ranges.firstIndex { $0.location >= top } ?? 0
+                    : ranges.lastIndex { $0.location < top } ?? ranges.count - 1
+            }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: ranges[index], actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: container)
+            let wanted = NSRect(origin: CGPoint(x: clip.bounds.minX, y: rect.minY + textView.textContainerOrigin.y - 80), size: clip.bounds.size)
+            clip.scroll(to: clip.constrainBoundsRect(wanted).origin)
+            textView.enclosingScrollView?.reflectScrolledClipView(clip)
+            lastJump = (index, clip.bounds.origin)
+            startGlow()
         }
     }
 }
